@@ -84,6 +84,16 @@ impl Setup {
         self
     }
 
+    /// By default, x264 spawns 1 thread per CPU core
+    /// Here we override this behaviour
+    pub fn disable_threads(mut self) -> Self {
+        // The default values are 0
+        self.raw.i_threads = 1;
+        self.raw.i_lookahead_threads = 1;
+        self.raw.b_sliced_threads = 1;
+        self
+    }
+
     /// A useless middleground between the baseline and high profiles.
     pub fn main(mut self) -> Self {
         unsafe {
