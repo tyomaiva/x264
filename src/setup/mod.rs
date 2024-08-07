@@ -1,5 +1,6 @@
-use {Encoder, Encoding, Error, Result};
-use core::mem;
+use crate::{Encoder, Encoding, Error, Result};
+use core::ffi::c_char;
+use core::mem::MaybeUninit;
 use x264::*;
 
 mod preset;
@@ -15,29 +16,28 @@ pub struct Setup {
 
 impl Setup {
     /// Creates a new builder with the specified preset and tune.
-    pub fn preset(
-        preset: Preset,
-        tune: Tune,
-        fast_decode: bool,
-        zero_latency: bool
-    ) -> Self {
-        let mut raw = unsafe { mem::uninitialized() };
+    pub fn preset(preset: Preset, tune: Tune, fast_decode: bool, zero_latency: bool) -> Self {
+        let mut raw = MaybeUninit::uninit();
 
         // Name validity verified at compile-time.
         assert_eq!(0, unsafe {
             x264_param_default_preset(
-                &mut raw,
+                raw.as_mut_ptr(),
                 preset.to_cstr(),
-                tune.to_cstr(fast_decode, zero_latency)
+                tune.to_cstr(fast_decode, zero_latency),
             )
         });
 
-        Self { raw }
+        Self {
+            raw: unsafe { raw.assume_init() },
+        }
     }
 
     /// Makes the first pass faster.
     pub fn fastfirstpass(mut self) -> Self {
-        unsafe { x264_param_apply_fastfirstpass(&mut self.raw); }
+        unsafe {
+            x264_param_apply_fastfirstpass(&mut self.raw);
+        }
         self
     }
 
@@ -59,9 +59,12 @@ impl Setup {
         self
     }
 
-    /// Please file an issue if you know what this does, because I have no idea.
+    /// Enable/disable Annex B start codes. Defaults to `true`.
+    ///
+    /// Annex B start codes are not used by containers based on the ISO BMFF
+    /// (Base Media File Format), such as MP4 and MOV.
     pub fn annexb(mut self, annexb: bool) -> Self {
-        self.raw.b_annexb = if annexb { 1 } else { 0 };
+        self.raw.b_annexb = annexb as i32;
         self
     }
 
@@ -76,10 +79,7 @@ impl Setup {
     /// The lowest profile, with guaranteed compatibility with all decoders.
     pub fn baseline(mut self) -> Self {
         unsafe {
-            x264_param_apply_profile(
-                &mut self.raw,
-                b"baseline\0" as *const u8 as *const i8
-            );
+            x264_param_apply_profile(&mut self.raw, b"baseline\0" as *const u8 as *const c_char);
         }
         self
     }
@@ -87,10 +87,7 @@ impl Setup {
     /// A useless middleground between the baseline and high profiles.
     pub fn main(mut self) -> Self {
         unsafe {
-            x264_param_apply_profile(
-                &mut self.raw,
-                b"main\0" as *const u8 as *const i8
-            );
+            x264_param_apply_profile(&mut self.raw, b"main\0" as *const u8 as *const c_char);
         }
         self
     }
@@ -98,21 +95,32 @@ impl Setup {
     /// The highest profile, which almost all encoders support.
     pub fn high(mut self) -> Self {
         unsafe {
-            x264_param_apply_profile(
-                &mut self.raw,
-                b"high\0" as *const u8 as *const i8
-            );
+            x264_param_apply_profile(&mut self.raw, b"high\0" as *const u8 as *const c_char);
         }
         self
     }
 
+    /// Set the maximum number of frames between keyframes.
+    pub fn max_keyframe_interval(mut self, interval: i32) -> Self {
+        self.raw.i_keyint_max = interval;
+        self
+    }
+
+    /// Set the minimum number of frames between keyframes.
+    pub fn min_keyframe_interval(mut self, interval: i32) -> Self {
+        self.raw.i_keyint_min = interval;
+        self
+    }
+
+    /// Set the scenecut threshold. Set this to zero to guarantee a keyframe
+    /// every `max_keyframe_interval`.
+    pub fn scenecut_threshold(mut self, threshold: i32) -> Self {
+        self.raw.i_scenecut_threshold = threshold;
+        self
+    }
+
     /// Build the encoder.
-    pub fn build<C>(
-        mut self,
-        csp: C,
-        width: i32,
-        height: i32,
-    ) -> Result<Encoder>
+    pub fn build<C>(mut self, csp: C, width: i32, height: i32) -> Result<Encoder>
     where
         C: Into<Encoding>,
     {
@@ -133,9 +141,9 @@ impl Setup {
 impl Default for Setup {
     fn default() -> Self {
         let raw = unsafe {
-            let mut raw = mem::uninitialized();
-            x264_param_default(&mut raw);
-            raw
+            let mut raw = MaybeUninit::uninit();
+            x264_param_default(raw.as_mut_ptr());
+            raw.assume_init()
         };
 
         Self { raw }
